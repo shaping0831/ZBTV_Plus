@@ -11,7 +11,8 @@ ffmpeg_time = 10
 # key: 地区，在http://tonkiang.us网站上搜索的关键词
 # value: 订阅url，在https://github.com/xisohi/IPTV-Multicast-source中找自己想要的
 search_dict = {
-    "上海": "https://mirror.ghproxy.com/https://raw.githubusercontent.com/xisohi/IPTV-Multicast-source/main/shanghai/telecom.txt"
+    "上海": "https://mirror.ghproxy.com/https://raw.githubusercontent.com/xisohi/IPTV-Multicast-source/main/shanghai/telecom.txt",
+    "北京": "https://mirror.ghproxy.com/https://raw.githubusercontent.com/xisohi/IPTV-Multicast-source/main/beijing/telecom.txt"
 }
 # 在http://tonkiang.us网站上搜索的源的页数
 search_page_num = 5
