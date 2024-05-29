@@ -18,7 +18,12 @@ from utils import (
     getTotalUrls,
     filter_CCTV_key,
     get_zubao_source_ip,
-    find_matching_values, kaisu_upload, getTotalUrlsFromInfoList
+    find_matching_values,
+    kaisu_upload,
+    getTotalUrlsFromInfoList,
+    getChannelUrlsTxt,
+    get_previous_results,
+    merge_urls_lists, checkByURLKeywordsBlacklist
 )
 import logging
 import os
@@ -61,6 +66,9 @@ post_headers = {
     'Content-Type': 'application/x-www-form-urlencoded',
     'User-Agent': 'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36'
 }
+
+previous_result_dict = {}
+channel_result_dict = {}
 
 
 def get_crawl_result():
@@ -137,10 +145,10 @@ def search_hotel_ip():
                 try:
                     if page == 1:
                         response = session.post("http://tonkiang.us/hoteliptv.php", headers=post_headers,
-                                                data=post_form)
+                                                data=post_form, timeout=30)
                     else:
                         page_url = f"http://tonkiang.us/hoteliptv.php?page={page}&pv={quote(search_kw)}&code={get_code}"
-                        response = session.get(page_url)
+                        response = session.get(page_url, timeout=30)
                     response.encoding = "UTF-8"
                     soup = BeautifulSoup(response.text, "html.parser")
                     # tables_div = soup.find("div", class_="tables")
@@ -220,21 +228,14 @@ class UpdateSource:
                             if not sub_ip.startswith("rtp://"):
                                 continue
                             rtp_url = sub_ip.replace("rtp:/", f"http://{zb_ip}/rtp")
+                            if not checkByURLKeywordsBlacklist(rtp_url):
+                                continue
                             if "#" in rtp_url:
                                 urls = rtp_url.split("#")
                                 infoList.append([urls[0], None, None])
                                 infoList.append([urls[1], None, None])
                             else:
                                 infoList.append([rtp_url, None, None])
-
-                if config.crawl_type in ["2", "3"]:
-                    key_name = name.replace(" ", "")
-                    tv_urls = self.crawl_result_dict.get(key_name, None)
-                    if tv_urls is not None:
-                        for tv_url in tv_urls:
-                            if not tv_url:
-                                continue
-                            infoList.append([tv_url, None, None])
 
                 try:
                     print(f"[{name}]有{len(infoList)}个直播源进行检测...")
@@ -246,26 +247,46 @@ class UpdateSource:
                                     getTotalUrls(sorted_data) or channelObj[name]
                             )
                             for (url, date, resolution), response_time in sorted_data:
-                                logger.info(
-                                    f"Name: {name}, URL: {url}, Date: {date}, Resolution: {resolution}, Response Time: {response_time}fps"
-                                )
+                                with self.lock:
+                                    logger.info(
+                                        f"Name: {name}, URL: {url}, Date: {date}, Resolution: {resolution}, Response Time: {response_time}fps"
+                                    )
+                    if len(channelUrls.get(name, [])) < config.zb_urls_limit:
+                        if config.crawl_type in ["2", "3"]:
+                            key_name = name.replace(" ", "")
+                            tv_urls = self.crawl_result_dict.get(key_name, None)
+                            if tv_urls is not None:
+                                for tv_url in tv_urls:
+                                    if len(channelUrls.get(name, [])) >= config.zb_urls_limit:
+                                        break
+                                    if not tv_url:
+                                        continue
+                                    channelUrls[name].append(tv_url)
+                    if len(channelUrls.get(name, [])) < config.zb_urls_limit:
+                        previous_result_channels = previous_result_dict.get(name, [])
+                        if previous_result_channels:
+                            channelUrls[name] = merge_urls_lists(channelUrls.get(name, []),
+                                                                 previous_result_channels
+                                                                 )[:config.zb_urls_limit]
                 except Exception as e:
                     print(f"Error on sorting: {e}")
                     continue
                 finally:
                     pbar.update()
             with self.lock:
-                updateChannelUrlsTxt(cate, channelUrls)
+                channel_result_dict[cate] = getChannelUrlsTxt(cate, channelUrls)
             # await asyncio.sleep(1)
         pbar.close()
 
     def main(self):
         channels = getChannelItems()
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = []
-            for key, channelObj in channels.items():
-                futures.append(executor.submit(asyncio.run, self.visitPage({key: channelObj})))
-            concurrent.futures.wait(futures)
+        # with concurrent.futures.ThreadPoolExecutor() as executor:
+        #     futures = []
+        #     for key, channelObj in channels.items():
+        #         futures.append(executor.submit(asyncio.run, self.visitPage({key: channelObj})))
+        #     concurrent.futures.wait(futures)
+        for key, channelObj in channels.items():
+            asyncio.run(self.visitPage({key: channelObj}))
 
         for handler in logger.handlers:
             handler.close()
@@ -274,8 +295,15 @@ class UpdateSource:
         user_log_file = (
             "user_result.log" if os.path.exists("user_config.py") else "result.log"
         )
-        updateFile(user_final_file, "result_new.txt")
+        # updateFile(user_final_file, "result_new.txt")
         updateFile(user_log_file, "result_new.log")
+        channel_result_list = []
+        for key, channelObj in channels.items():
+            channel_result_list.append(channel_result_dict.get(key, ""))
+        with open(user_final_file, "w", encoding="utf-8") as f:
+            f.write(
+                "\n".join(channel_result_list) + "\n"
+            )  # 写入文件，并换行
         print(f"Update completed! Please check the {user_final_file} file!")
 
         ftp = None
@@ -286,15 +314,15 @@ class UpdateSource:
             ftp_port = ftp_port if ftp_port else os.getenv('ftp_port')
             ftp_user = getattr(config, "ftp_user", None)
             ftp_user = ftp_user if ftp_user else os.getenv('ftp_user')
-            ftp_pass = getattr(config, "ftp_pass", None)
-            ftp_pass = ftp_pass if ftp_pass else os.getenv('ftp_pass')
+            ftp_passwd = getattr(config, "ftp_passwd", None)
+            ftp_passwd = ftp_passwd if ftp_passwd else os.getenv('ftp_passwd')
             ftp_remote_file = getattr(config, "ftp_remote_file", None)
             ftp_remote_file = ftp_remote_file if ftp_remote_file else os.getenv('ftp_remote_file')
 
-            if ftp_host and ftp_port and ftp_user and ftp_pass and ftp_remote_file:
+            if ftp_host and ftp_port and ftp_user and ftp_passwd and ftp_remote_file:
                 ftp = FTP()
                 ftp.connect(ftp_host, int(ftp_port))
-                ftp.login(user=ftp_user, passwd=ftp_pass)
+                ftp.login(user=ftp_user, passwd=ftp_passwd)
                 with open(user_final_file, 'rb') as file:
                     up_res = ftp.storbinary(f'STOR {ftp_remote_file}', file)
                     if up_res.startswith('226 Transfer complete'):
@@ -316,6 +344,7 @@ class UpdateSource:
 
 
 if __name__ == '__main__':
+    previous_result_dict = get_previous_results(config.final_file)
     crawl_result_dict = get_crawl_result()
     subscribe_dict, kw_zbip_dict, search_keyword_list = search_hotel_ip()
     UpdateSource(crawl_result_dict, subscribe_dict, kw_zbip_dict, search_keyword_list).main()

@@ -16,6 +16,8 @@ search_dict = {
 }
 # 在http://tonkiang.us网站上搜索的源的页数
 search_page_num = 5
+# url关键词黑名单
+url_keywords_blacklist = []
 # 忽略的关键词，比如在demo.txt中配置广东珠江,但在订阅中只有广东珠江高清,就需要忽略掉"高清"
 search_ignore_key = ["高清", "4K"]
 # crawl_type的默认值为1-只爬取http://tonkiang.us上组播源；2-只爬取crawl_urls中配置的网站；3-全部
@@ -30,7 +32,7 @@ ipv6_proxy = "http://www.ipv6proxy.net/go.php?u=" #此代理用于github，国�
 ftp_host = ""
 ftp_port = ""
 ftp_user = ""
-ftp_pass = ""
+ftp_passwd = ""
 ftp_remote_file = ""
 
 # 凯速网上传文件配置
